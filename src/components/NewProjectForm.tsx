@@ -31,11 +31,12 @@ export function NewProjectForm({ onComplete }: NewProjectFormProps) {
     scene_duration: 8,
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    const projectId = crypto.randomUUID();
     const project = {
-      id: crypto.randomUUID(),
+      id: projectId,
       name: formData.name,
       description: formData.description,
       generation_mode: formData.generation_mode,
@@ -52,7 +53,55 @@ export function NewProjectForm({ onComplete }: NewProjectFormProps) {
       updated_at: new Date().toISOString(),
     };
 
-    storage.saveProject(project);
+    await storage.saveProject(project);
+
+    if (formData.generation_mode === 'video_to_scene' && formData.video_url && window.electronAPI) {
+      try {
+        const result = await window.electronAPI.extractVideoScenes({
+          videoPath: formData.video_url,
+          maxScenes: formData.scene_count,
+          sceneDuration: formData.scene_duration,
+          projectName: formData.name
+        });
+
+        if (result.success && result.scenes) {
+          for (let i = 0; i < result.scenes.length; i++) {
+            const sceneData = result.scenes[i];
+            const scene = {
+              id: crypto.randomUUID(),
+              project_id: projectId,
+              scene_number: sceneData.scene_number || (i + 1),
+              prompt: sceneData.visual_prompt || sceneData.description,
+              voice_text: sceneData.voice_text || sceneData.description,
+              status: 'pending' as const,
+              selected_video_url: '',
+              local_path: '',
+              script_file_path: '',
+              duration: sceneData.duration || formData.scene_duration,
+              visual_elements: {
+                characterConsistency: result.analysis?.style || '',
+                environmentConsistency: result.analysis?.mood || ''
+              },
+              error_message: '',
+              retry_count: 0,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+
+            await storage.saveScene(scene);
+          }
+
+          await window.electronAPI.showNotification(
+            'Video Analysis Complete',
+            `Extracted ${result.scenes.length} scenes from video`
+          );
+        }
+      } catch (error) {
+        console.error('Video extraction error:', error);
+        alert('Video extraction failed. Please check console for details.');
+      }
+    }
+
     onComplete();
   };
 
@@ -139,16 +188,60 @@ export function NewProjectForm({ onComplete }: NewProjectFormProps) {
               />
             </div>
           ) : (
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">Video URL *</label>
-              <input
-                type="url"
-                value={formData.video_url}
-                onChange={(e) => setFormData({ ...formData, video_url: e.target.value })}
-                placeholder="https://youtube.com/watch?v=..."
-                className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent outline-none transition"
-                required
-              />
+            <div className="space-y-4">
+              <label className="block text-sm font-semibold text-slate-700 mb-2">Video Source *</label>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-2">Video URL</label>
+                <input
+                  type="url"
+                  value={formData.video_url}
+                  onChange={(e) => setFormData({ ...formData, video_url: e.target.value })}
+                  placeholder="https://youtube.com/watch?v=... or paste any video URL"
+                  className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent outline-none transition"
+                />
+              </div>
+
+              <div className="flex items-center justify-center">
+                <span className="text-sm text-slate-500 bg-slate-100 px-4 py-1 rounded-full">OR</span>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-2">Upload Video File</label>
+                {window.electronAPI ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const filePath = await window.electronAPI.selectVideoFile();
+                      if (filePath) {
+                        setFormData({ ...formData, video_url: filePath });
+                      }
+                    }}
+                    className="w-full px-4 py-3 border-2 border-dashed border-slate-300 rounded-lg hover:border-slate-400 transition text-slate-600 hover:text-slate-700 font-medium"
+                  >
+                    📁 Browse Video File (MP4, MOV, AVI, etc.)
+                  </button>
+                ) : (
+                  <input
+                    type="file"
+                    accept="video/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setFormData({ ...formData, video_url: URL.createObjectURL(file) });
+                      }
+                    }}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent outline-none transition"
+                  />
+                )}
+                {formData.video_url && !formData.video_url.startsWith('http') && (
+                  <p className="text-sm text-green-600 mt-2">✓ Video selected: {formData.video_url.split('/').pop()?.substring(0, 50)}</p>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-500">
+                💡 Tip: Upload a video file for best results, or paste a YouTube/video URL
+              </p>
             </div>
           )}
         </div>
